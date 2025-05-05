@@ -128,29 +128,29 @@ class _ResourceEnvironmentGenerator:
 
         app_cpu.initialization = app_cpu_init
 
-        #        # Create ApplicationServer HDD
-        #        app_hdd = self._PCM.ProcessingResource(name="HDD")
-        #        app_hdd.type = hdd_resource
-        #
-        #        # Initialize HDD properties
-        #        app_hdd_init = self._PCM.Initialization()
-        #
-        #        # Processing rate initializer
-        #        app_hdd_rate = self._PCM.PropertyInitializer()
-        #        app_hdd_rate.property = hdd_resource.definitions[0]  # processingRate
-        #        app_hdd_rate.specification = self._create_double_literal(50 * 1000 * 1000)
-        #        app_hdd_init.contents.append(app_hdd_rate)
-        #
-        #        # Scheduling policy initializer
-        #        app_hdd_sched = self._PCM.PropertyInitializer()
-        #        app_hdd_sched.property = hdd_resource.definitions[1]  # schedulingPolicy
-        #        app_hdd_sched.referencedElement = fcfs_entity
-        #        app_hdd_init.contents.append(app_hdd_sched)
-        #
-        #        app_hdd.initialization = app_hdd_init
+        # Create ApplicationServer HDD
+        app_hdd = self._PCM.ProcessingResource(name="HDD")
+        app_hdd.type = hdd_resource
+
+        # Initialize HDD properties
+        app_hdd_init = self._PCM.Initialization()
+
+        # Processing rate initializer
+        app_hdd_rate = self._PCM.PropertyInitializer()
+        app_hdd_rate.property = hdd_resource.definitions[0]  # processingRate
+        app_hdd_rate.specification = self._create_double_literal(50 * 1000 * 1000)
+        app_hdd_init.contents.append(app_hdd_rate)
+
+        # Scheduling policy initializer
+        app_hdd_sched = self._PCM.PropertyInitializer()
+        app_hdd_sched.property = hdd_resource.definitions[1]  # schedulingPolicy
+        app_hdd_sched.referencedElement = fcfs_entity
+        app_hdd_init.contents.append(app_hdd_sched)
+
+        app_hdd.initialization = app_hdd_init
 
         # Add resources to ApplicationServer
-        app_server.contents.extend([app_cpu])
+        app_server.contents.extend([app_cpu, app_hdd])
 
         #        # === Create DatabaseServer container ===
         #        db_server = self._PCM.ResourceContainer(name="DatabaseServer")

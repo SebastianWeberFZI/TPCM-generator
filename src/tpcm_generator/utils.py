@@ -48,17 +48,19 @@ def save_model(model, filename, rset):
     model_resource.save()
     return model_resource
 
+
 def random_name(prefix):
-        """Generate a random name with a given prefix.
+    """Generate a random name with a given prefix.
 
-        Args:
-            prefix: Prefix for the name
+    Args:
+        prefix: Prefix for the name
 
-        Returns:
-            A random name string
-        """
-        suffix = "".join(random.choices(string.ascii_uppercase, k=5))
-        return f"{prefix}_{suffix}"
+    Returns:
+        A random name string
+    """
+    suffix = "".join(random.choices(string.ascii_uppercase, k=8))
+    return f"{prefix}_{suffix}"
+
 
 def convert_to_tpcm(xml_path, tpcm_path):
     """Convert XML model to TPCM format.
@@ -94,120 +96,152 @@ def convert_to_tpcm(xml_path, tpcm_path):
         if e.stderr:
             print(f"Converter error: {e.stderr}")
         return False
-class UniqueRandomInterfaceSampler:
-    """Samples interfaces for components, handling provided and required roles.
 
-    This handles edge cases like having fewer interfaces than requested
-    and ensures valid sampling even with very small numbers of interfaces.
+
+def convert_to_tpcm_worker(args):
+    """Worker function for parallel TPCM conversion.
+    
+    Args:
+        args: Tuple of (xml_path, tpcm_path)
+        
+    Returns:
+        Tuple of (xml_path, tpcm_path, success, error_message)
     """
+    xml_path, tpcm_path = args
+    base_dir = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
+    jar_path = os.path.join(base_dir, "SaveAs.jar")
+    
+    try:
+        result = subprocess.run(
+            ["java", "-jar", jar_path, xml_path, tpcm_path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return (xml_path, tpcm_path, True, result.stdout.strip())
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Error: {str(e)}"
+        if e.stdout:
+            error_msg += f" Output: {e.stdout}"
+        if e.stderr:
+            error_msg += f" Error: {e.stderr}"
+        return (xml_path, tpcm_path, False, error_msg)
+
+
+def convert_multiple_to_tpcm(file_paths, num_processes=None):
+    """Convert multiple XML models to TPCM format in parallel.
+    
+    Args:
+        file_paths: List of tuples, each containing (xml_path, tpcm_path)
+        num_processes: Number of parallel processes to use (default: CPU count)
+        
+    Returns:
+        Dictionary with results for each conversion
+    """
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    import time
+    
+    start_time = time.time()
+    
+    # Set number of processes
+    if num_processes is None:
+        num_processes = min(multiprocessing.cpu_count(), len(file_paths))
+    else:
+        num_processes = min(num_processes, multiprocessing.cpu_count(), len(file_paths))
+    
+    print(f"Converting {len(file_paths)} files using {num_processes} processes")
+    
+    results = {}
+    
+    # Create paths for input directory
+    input_dir = os.path.dirname(file_paths[0][1]) if file_paths else "input"
+    os.makedirs(input_dir, exist_ok=True)
+    
+    # Process files in parallel using ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=num_processes) as executor:
+        for xml_path, tpcm_path, success, message in executor.map(convert_to_tpcm_worker, file_paths):
+            results[xml_path] = {
+                "tpcm_path": tpcm_path,
+                "success": success,
+                "message": message,
+            }
+            if success:
+                print(f"Converted {xml_path} to {tpcm_path}")
+            else:
+                print(f"Failed to convert {xml_path}: {message}")
+    
+    total_time = time.time() - start_time
+    print(f"Total conversion time: {total_time:.2f} seconds")
+    
+    # Process metadata if available
+    metadata_updates = []
+    for xml_path, result in results.items():
+        metadata_path = os.path.splitext(xml_path)[0] + ".metadata"
+        if os.path.exists(metadata_path):
+            try:
+                import json
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Update metadata with conversion info
+                metadata["tpcm_conversion"] = {
+                    "success": result["success"],
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "xml_path": xml_path,
+                    "tpcm_path": result["tpcm_path"]
+                }
+                
+                # Save updated metadata
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                
+                # Also copy metadata to the input directory alongside the TPCM file
+                if result["success"]:
+                    tpcm_metadata_path = os.path.splitext(result["tpcm_path"])[0] + ".metadata"
+                    with open(tpcm_metadata_path, 'w') as f:
+                        json.dump(metadata, f, indent=2)
+                
+                metadata_updates.append((metadata_path, result["success"]))
+            except Exception as e:
+                print(f"Error updating metadata for {xml_path}: {e}")
+    
+    # Summary stats
+    successful = sum(1 for r in results.values() if r["success"])
+    print(f"Successfully converted {successful} out of {len(file_paths)} files")
+    print(f"Updated {len(metadata_updates)} metadata files")
+    
+    return results
+
+
+class UniqueRandomInterfaceSampler:
     def __init__(self, data):
-        self.data = list(data)  # Create a copy to avoid modifying the original
+        self.data = data
+        self.remaining = list(data)
+        self.remaining_provided = list(data)
 
     def sample(self, count_provided, count_required):
-        """Sample interfaces for provided and required roles.
+        if count_provided + count_required > len(self.data):
+            raise ValueError("2 * n cannot be greater than the size of the data set")
 
-        Args:
-            count_provided: Desired number of provided interfaces
-            count_required: Desired number of required interfaces
+        if len(self.remaining_provided) < count_provided:
+            self.remaining_provided = list(self.data)
 
-        Returns:
-            Tuple of (provided_interfaces, required_interfaces)
-        """
-        # Handle empty interfaces case
-        if not self.data:
-            return [], []
+        list_provided = random.sample(self.remaining_provided, count_provided)
+        self.remaining_provided = list(
+            set(self.remaining_provided) - set(list_provided)
+        )
+        self.remaining = list(set(self.remaining) - set(list_provided))
 
-        # Get total available interfaces
-        available = len(self.data)
+        if len(self.remaining) < count_required:
+            self.remaining = list(set(self.data) - set(list_provided))
 
-        # Adjust counts if more requested than available
-        count_provided = min(count_provided, available)
-        count_required = min(count_required, available)
+        list_required = random.sample(self.remaining, count_required)
+        self.remaining = list(set(self.remaining) - set(list_required))
 
-        # Special case: If we only have one interface, use it for both roles
-        if available == 1:
-            return self.data, self.data
-
-        # If total requested interfaces exceeds available,
-        # we need to share some interfaces between provided and required
-        if count_provided + count_required > available:
-            # We'll need some overlap - distribute interfaces proportionally
-            total_requested = count_provided + count_required
-
-            # Calculate how many interfaces need to be shared
-            overlap_count = count_provided + count_required - available
-
-            # First, ensure we have enough for provided interfaces
-            all_interfaces = self.data.copy()
-            random.shuffle(all_interfaces)
-
-            # Split interfaces into three groups:
-            # 1. Provided-only
-            # 2. Shared (both provided and required)
-            # 3. Required-only
-            shared_count = overlap_count
-            provided_only_count = count_provided - shared_count
-            required_only_count = count_required - shared_count
-
-            # Adjust if we have negative values
-            if provided_only_count < 0:
-                shared_count += provided_only_count
-                provided_only_count = 0
-            if required_only_count < 0:
-                shared_count += required_only_count
-                required_only_count = 0
-
-            # Ensure we don't exceed available interfaces
-            total_count = provided_only_count + shared_count + required_only_count
-            if total_count > available:
-                # Scale everything down proportionally
-                scale_factor = available / total_count
-                provided_only_count = max(0, int(provided_only_count * scale_factor))
-                shared_count = max(0, int(shared_count * scale_factor))
-                required_only_count = max(0, int(required_only_count * scale_factor))
-
-                # Handle any remaining interfaces
-                remaining = available - (provided_only_count + shared_count + required_only_count)
-                if remaining > 0:
-                    # Prioritize shared interfaces
-                    shared_count += remaining
-
-            # Create the groups
-            start_idx = 0
-            provided_only = all_interfaces[start_idx:start_idx + provided_only_count]
-            start_idx += provided_only_count
-
-            shared = all_interfaces[start_idx:start_idx + shared_count]
-            start_idx += shared_count
-
-            required_only = all_interfaces[start_idx:start_idx + required_only_count]
-
-            # Create final lists
-            provided_interfaces = provided_only + shared
-            required_interfaces = required_only + shared
-
-            return provided_interfaces, required_interfaces
-        else:
-            # If we have enough interfaces, just randomly select distinct sets
-            all_interfaces = self.data.copy()
-            random.shuffle(all_interfaces)
-
-            provided_interfaces = all_interfaces[:count_provided]
-
-            # For required interfaces, use distinct ones first then reuse if needed
-            remaining = [i for i in all_interfaces if i not in provided_interfaces]
-
-            if len(remaining) >= count_required:
-                # We have enough distinct interfaces
-                required_interfaces = random.sample(remaining, count_required)
-            else:
-                # Need to reuse some provided interfaces
-                required_interfaces = remaining.copy()
-                additional_needed = count_required - len(required_interfaces)
-                additional = random.sample(provided_interfaces, additional_needed)
-                required_interfaces.extend(additional)
-
-            return provided_interfaces, required_interfaces
+        return list_provided, list_required
 
 
 class UniqueRandomSampler:
